@@ -1,46 +1,14 @@
-from definitions import ROOT_DIR
-from decorators import timer
+from base import Base
 
-import json
 import requests
+import mysql.connector
 
 
-class Operations:
-    """
-    Encapsulates all betting operations
-    """
+class Operations(Base):
 
     def __init__(self):
-        """
-        Initialize all static data required by Operations.
-        """
-        self.certificate = (ROOT_DIR + '/resources/client-2048.crt', ROOT_DIR + '/resources/client-2048.key')
+        super().__init__()
 
-        with open(ROOT_DIR + '/resources/setting.json', 'r+') as file:
-            setting = json.load(file)
-
-        self.username = setting['username']
-        self.password = setting['password']
-        self.login_url = setting['login_url']
-        self.application = setting['application']
-        self.application_key = setting['application_key']
-        self.certificate_login = setting['certificate_login']
-        self.rest_endpoint = setting['rest_endpoint']
-
-        payload = f"username={self.username}&password={self.password}"
-        headers = {
-            'Accept': "application/json",
-            'X-Application': self.application,
-            'Content-Type': "application/x-www-form-urlencoded",
-            'cache-control': "no-cache"
-        }
-        response = requests.request("POST", self.login_url, data=payload, headers=headers)
-        if response.status_code == 200:
-            self.token = response.json()['token']
-        else:
-            self.token = None
-
-    @timer
     def retrieve(self, operation, payload):
         """
         Generic method hat retrieves data based on the operation and filter supplied.
@@ -53,25 +21,52 @@ class Operations:
             'X-Authentication': self.token,
             'Content-Type': 'application/json'
         }
-        return requests.request('POST', self.rest_endpoint + operation, data=payload, headers=headers).json()
+        return requests.request('post', self.rest_endpoint + operation, data=payload, headers=headers).json()
 
 
-# todo: explore returned data from listEvents
-if __name__ == '__main__':
-    ops = Operations()
+class OperationsSQL(Base):
+    """
+    Data handling for Operations
+    """
 
-    op = 'listEvents/'
-    pl = '{"filter":{"eventTypeIds":["1"]}}'
-    dt = ops.retrieve(op, pl)
-    print(len(dt))
+    dbname = 'betting'
+    tables = {'events': (
+        "CREATE TABLE IF NOT EXISTS `{}`.`events` ("
+        "  `id` INT NOT NULL,"
+        "  `name` VARCHAR(180) NOT NULL,"
+        "  `countryCode` VARCHAR(45) NULL,"
+        "  `timezone` VARCHAR(45) NULL,"
+        "  `openDate` VARCHAR(45) NULL,"
+        "  `marketCount` INT NOT NULL,"
+        "  PRIMARY KEY (`id`)"
+        ") ENGINE=InnoDB".format(dbname))}
+    query = 'insert into `{}`.`events` (`id`, `name`, `countryCode`, `timezone`, `openDate`, `marketCount`) ' \
+            'values (%s, %s, %s, %s, %s, %s)'.format(dbname)
 
-    # working with the returned data
-    count = 0
-    for ev in dt:
-        # retrieve event and marketCount
-        mkc = ev['marketCount']
-        for k, v in ev['event'].items():
-            if ' v ' in v:
-                count += 1
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
 
-    print(count)
+    def list_events_sql(self):
+        try:
+            connection = mysql.connector.connect(**self.mysql_credentials)
+            cursor = connection.cursor()
+
+            cursor.execute("CREATE DATABASE IF NOT EXISTS {} DEFAULT CHARACTER SET 'utf8'".format(self.dbname))
+            cursor.execute(self.tables['events'])
+
+            for entry in self.data:
+                if ' v ' in entry['event']['name']:
+                    try:
+                        country_code = entry['event']['countryCode']
+                    except KeyError:
+                        country_code = ''
+                    print('..updating:', entry['event']['name'])
+                    cursor.execute(self.query,
+                                   (entry['event']['id'], entry['event']['name'], country_code,
+                                    entry['event']['timezone'], entry['event']['openDate'], entry['marketCount']))
+
+            connection.commit()
+
+        except mysql.connector.Error as error:
+            print(error)
