@@ -62,11 +62,17 @@ class OperationsSQL(Base):
                     except KeyError:
                         country_code = ''
                     print('..updating:', entry['event']['name'])
-                    cursor.execute(self.query,
-                                   (entry['event']['id'], entry['event']['name'], country_code,
-                                    entry['event']['timezone'], entry['event']['openDate'], entry['marketCount']))
+                    try:
+                        cursor.execute(self.query,
+                                       (entry['event']['id'], entry['event']['name'], country_code,
+                                        entry['event']['timezone'], entry['event']['openDate'], entry['marketCount']))
+                    except mysql.connector.Error as error:
+                        print(error)
 
             connection.commit()
 
         except mysql.connector.Error as error:
             print(error)
+
+    def list_market_catalogue_sql(self):
+        pass
