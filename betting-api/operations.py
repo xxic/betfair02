@@ -5,36 +5,6 @@ import time
 
 
 class Operations(Base):
-
-    def __init__(self):
-        super().__init__()
-
-    def update_events(self, event_id):
-        """
-        This procedure seeks to do the following
-        - Get all markets for a specified event.. commit to betting.markets
-        - Get all runners for the markets above.. commit to betting.runners
-        The procedure assumes the following
-        - betting.events table exists (and is properly filtered)
-        :param event_id:
-        :return:
-        """
-        operation = 'listMarketCatalogue/'
-        payload = '''{"filter":{"eventIds":["
-        ''' + event_id + '''"]},"maxResults":"50","marketProjection":["RUNNER_METADATA"]}'''
-        market_catalogue = self.retrieve(operation, payload)
-        try:
-            connection = mysql.connector.connect(**self.mysql_credentials)
-            cursor = connection.cursor()
-        except mysql.connector.Error as error:
-            print(error)
-
-
-class OperationsSQL(Base):
-    """
-    Data handling for Operations
-    """
-
     dbname = 'betting'
 
     tables = {
@@ -90,9 +60,8 @@ class OperationsSQL(Base):
     events_query = 'insert into `{}`.`events` (`eventId`, `eventName`, `countryCode`, `timezone`, `openDate`, ' \
                    '`marketCount`) ', 'values (%s, %s, %s, %s, %s, %s)'.format(dbname)
 
-    def __init__(self, data):
+    def __init__(self):
         super().__init__()
-        self.data = data
         # Initialize database and tables
         try:
             connection = mysql.connector.connect(**self.mysql_credentials)
