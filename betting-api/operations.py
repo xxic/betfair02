@@ -1,7 +1,7 @@
 from base import Base
 
-import requests
 import mysql.connector
+import time
 
 
 class Operations(Base):
@@ -9,19 +9,25 @@ class Operations(Base):
     def __init__(self):
         super().__init__()
 
-    def retrieve(self, operation, payload):
+    def update_events(self, event_id):
         """
-        Generic method hat retrieves data based on the operation and filter supplied.
-        :param operation: Betting API operation, for example; listEvents/
-        :param payload: Filter
-        :return: Operation-type data
+        This procedure seeks to do the following
+        - Get all markets for a specified event.. commit to betting.markets
+        - Get all runners for the markets above.. commit to betting.runners
+        The procedure assumes the following
+        - betting.events table exists (and is properly filtered)
+        :param event_id:
+        :return:
         """
-        headers = {
-            'X-Application': self.application_key,
-            'X-Authentication': self.token,
-            'Content-Type': 'application/json'
-        }
-        return requests.request('post', self.rest_endpoint + operation, data=payload, headers=headers).json()
+        operation = 'listMarketCatalogue/'
+        payload = '''{"filter":{"eventIds":["
+        ''' + event_id + '''"]},"maxResults":"50","marketProjection":["RUNNER_METADATA"]}'''
+        market_catalogue = self.retrieve(operation, payload)
+        try:
+            connection = mysql.connector.connect(**self.mysql_credentials)
+            cursor = connection.cursor()
+        except mysql.connector.Error as error:
+            print(error)
 
 
 class OperationsSQL(Base):
@@ -30,30 +36,79 @@ class OperationsSQL(Base):
     """
 
     dbname = 'betting'
-    tables = {'events': (
-        "CREATE TABLE IF NOT EXISTS `{}`.`events` ("
-        "  `id` INT NOT NULL,"
-        "  `name` VARCHAR(180) NOT NULL,"
-        "  `countryCode` VARCHAR(45) NULL,"
-        "  `timezone` VARCHAR(45) NULL,"
-        "  `openDate` VARCHAR(45) NULL,"
-        "  `marketCount` INT NOT NULL,"
-        "  PRIMARY KEY (`id`)"
-        ") ENGINE=InnoDB".format(dbname))}
-    query = 'insert into `{}`.`events` (`id`, `name`, `countryCode`, `timezone`, `openDate`, `marketCount`) ' \
-            'values (%s, %s, %s, %s, %s, %s)'.format(dbname)
+
+    tables = {
+        'events': '''
+        CREATE TABLE IF NOT EXISTS `betting`.`events` (
+          `eventId` INT NOT NULL,
+          `eventName` VARCHAR(180) NOT NULL,
+          `countryCode` VARCHAR(5) NULL,
+          `timezone` VARCHAR(45) NOT NULL,
+          `openDate` DATETIME NOT NULL,
+          `marketCount` INT NOT NULL,
+          PRIMARY KEY (`eventId`))
+        ENGINE = InnoDB
+        ''',
+        'markets': '''
+        CREATE TABLE IF NOT EXISTS `betting`.`markets` (
+          `eventId` INT NOT NULL,
+          `eventName` VARCHAR(180) NULL,
+          `marketId` FLOAT(20,19) NOT NULL,
+          `marketName` VARCHAR(180) NOT NULL,
+          `totalMatched` FLOAT(10,2) NOT NULL,
+          `status` TINYINT NOT NULL,
+          `version` BIGINT NOT NULL,
+          PRIMARY KEY (`marketId`),
+          INDEX `fk_eventId_idx` (`eventId` ASC) VISIBLE,
+          CONSTRAINT `fk_eventId`
+            FOREIGN KEY (`eventId`)
+            REFERENCES `betting`.`events` (`eventId`)
+            ON DELETE CASCADE
+            ON UPDATE CASCADE)
+        ENGINE = InnoDB
+        ''',
+        'runners': '''
+        CREATE TABLE IF NOT EXISTS `betting`.`runners` (
+          `eventName` VARCHAR(180) NULL,
+          `marketId` FLOAT(20,19) NOT NULL,
+          `selectionId` INT NOT NULL,
+          `runnerName` VARCHAR(90) NOT NULL,
+          `handicap` FLOAT(6,3) NOT NULL,
+          `status` TINYINT NOT NULL,
+          `lastPriceTraded` FLOAT(10,2) NULL,
+          `totalMatched` FLOAT(10,2) NULL,
+          INDEX `fk_marketId_idx` (`marketId` ASC) VISIBLE,
+          CONSTRAINT `fk_marketId`
+            FOREIGN KEY (`marketId`)
+            REFERENCES `betting`.`markets` (`marketId`)
+            ON DELETE CASCADE
+            ON UPDATE CASCADE)
+        ENGINE = InnoDB
+        '''
+    }
+
+    events_query = 'insert into `{}`.`events` (`eventId`, `eventName`, `countryCode`, `timezone`, `openDate`, ' \
+                   '`marketCount`) ', 'values (%s, %s, %s, %s, %s, %s)'.format(dbname)
 
     def __init__(self, data):
         super().__init__()
         self.data = data
+        # Initialize database and tables
+        try:
+            connection = mysql.connector.connect(**self.mysql_credentials)
+            cursor = connection.cursor()
+            cursor.execute("CREATE DATABASE IF NOT EXISTS {} DEFAULT CHARACTER SET 'utf8'".format(self.dbname))
+            for key, value in self.tables.items():
+                print('create {} table..'.format(key))
+                cursor.execute(value)
+            connection.commit()
+        except mysql.connector.Error as error:
+            print(error)
 
     def list_events_sql(self):
         try:
             connection = mysql.connector.connect(**self.mysql_credentials)
             cursor = connection.cursor()
-
-            cursor.execute("CREATE DATABASE IF NOT EXISTS {} DEFAULT CHARACTER SET 'utf8'".format(self.dbname))
-            cursor.execute(self.tables['events'])
 
             for entry in self.data:
                 if ' v ' in entry['event']['name']:
@@ -63,7 +118,7 @@ class OperationsSQL(Base):
                         country_code = ''
                     print('..updating:', entry['event']['name'])
                     try:
-                        cursor.execute(self.query,
+                        cursor.execute(self.events_query,
                                        (entry['event']['id'], entry['event']['name'], country_code,
                                         entry['event']['timezone'], entry['event']['openDate'], entry['marketCount']))
                     except mysql.connector.Error as error:

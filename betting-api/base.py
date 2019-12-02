@@ -43,3 +43,17 @@ class Base:
             'port': setting['mysql_port'],
             'database': setting['mysql_default_schema']
         }
+
+    def retrieve(self, operation, payload):
+        """
+        Generic method hat retrieves data based on the operation and filter(payload) supplied.
+        :param operation: Betting API operation, for example; listEvents/
+        :param payload: Filter
+        :return: Operation-type data
+        """
+        headers = {
+            'X-Application': self.application_key,
+            'X-Authentication': self.token,
+            'Content-Type': 'application/json'
+        }
+        return requests.request('post', self.rest_endpoint + operation, data=payload, headers=headers).json()
