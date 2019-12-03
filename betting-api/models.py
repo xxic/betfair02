@@ -21,7 +21,7 @@ tables = {
         CREATE TABLE IF NOT EXISTS `{}`.`market` (
           `event_id` INT NOT NULL,
           `event_name` VARCHAR(180) NOT NULL,
-          `market_id` FLOAT(20,19) NOT NULL,
+          `market_id` FLOAT(10,9) NOT NULL,
           `market_name` VARCHAR(90) NOT NULL,
           `is_market_data_delayed` TINYINT NOT NULL,
           `status` VARCHAR(10) NOT NULL,
@@ -56,7 +56,7 @@ tables = {
         CREATE TABLE IF NOT EXISTS `{}`.`runner` (
           `event_id` INT NOT NULL,
           `event_name` VARCHAR(180) NOT NULL,
-          `market_id` FLOAT(20,19) NOT NULL,
+          `market_id` FLOAT(10,9) NOT NULL,
           `market_name` VARCHAR(90) NOT NULL,
           `selection_id` MEDIUMINT NOT NULL,
           `runner_name` VARCHAR(90) NOT NULL,
@@ -95,7 +95,7 @@ tables = {
         CREATE TABLE IF NOT EXISTS `{}`.`available_to_back` (
           `event_id` INT NOT NULL,
           `event_name` VARCHAR(180) NOT NULL,
-          `market_id` FLOAT(20,19) NOT NULL,
+          `market_id` FLOAT(10,9) NOT NULL,
           `market_name` VARCHAR(90) NOT NULL,
           `selection_id` MEDIUMINT NOT NULL,
           `runner_name` VARCHAR(90) NOT NULL,
@@ -143,7 +143,7 @@ tables = {
         CREATE TABLE IF NOT EXISTS `{}`.`available_to_lay` (
           `event_id` INT NOT NULL,
           `event_name` VARCHAR(180) NOT NULL,
-          `market_id` FLOAT(20,19) NOT NULL,
+          `market_id` FLOAT(10,9) NOT NULL,
           `market_name` VARCHAR(90) NOT NULL,
           `selection_id` MEDIUMINT NOT NULL,
           `runner_name` VARCHAR(90) NOT NULL,
@@ -189,6 +189,8 @@ tables = {
     '''.format(database, database, database, database, database, database, database)
 }
 
+runner_data = {}
+
 
 class Storage(Base):
 
@@ -232,10 +234,17 @@ class Event(Base):
 
             self.insert()
 
-            # pass to market
+            # get market catalogue
+            operation = 'listMarketCatalogue/'
+            payload = '{"filter":{"eventIds":["' + self.event_id + \
+                      '"]},"maxResults":"50","marketProjection":["RUNNER_METADATA"]}'
+            catalogue_data = self.retrieve(operation, payload)
             self.markets = []
-            #
-            operation = ''
+            for catalogue in catalogue_data:
+                operation = 'listMarketBook/'
+                payload = '{"marketIds":["' + catalogue['marketId'] + '"]}'
+                market_data = self.retrieve(operation, payload)
+                self.markets.append(Market(self.event_id, self.event_name, catalogue, market_data))
 
     def insert(self):
         values = (self.event_id, self.event_name, self.country_code, self.timezone, self.open_date, self.market_count)
@@ -250,52 +259,60 @@ class Event(Base):
 
 
 class Market(Base):
+    query = 'INSERT INTO `{}`.`market` (`event_id`, `event_name`, `market_id`, `market_name`, ' \
+            '`is_market_data_delayed`, `status`, `bet_delayed`, `bsp_reconciled`, `complete`, `inplay`, ' \
+            '`number_of_winners`, `number_of_runners`, `number_of_active_runners`, `total_matched`, ' \
+            '`cross_matching`, `runners_voidable`, `version`) ' \
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'.format(database)
 
-    def __init__(self, data: dict):
-        """
-        :param data:
-        """
+    def __init__(self, ev_id, ev_name, market_catalogue: dict, market_book: dict):
         super().__init__()
-        for key, value in data.items():
-            if key == 'marketId':
-                self.market_id = value
-            if key == 'marketName':
-                self.market_name = value
-            if key == 'totalMatched':
-                self.total_matched = value
+        self.ev_id = ev_id
+        self.ev_name = ev_name
 
-        operation = 'listMarketBook/'
-        payload = '{"marketIds":["' + self.market_id + '"]}'
-        response = self.retrieve(operation, payload)
+        # get selection_id and runner_name from market market_catalogue
+        for runner in market_catalogue['runners']:
+            runner_data[runner['selectionId']] = runner['runnerName']
 
-        for key, value in response[0].items():
-            if key == 'status':
-                self.status = value
-            if key == 'totalAvailable':
-                self.total_available = value
-            if key == 'version':
-                self.version = value
-        # todo: commit to markets table
+        # get other market values from market_book
+        self.market_id = market_book[0]['marketId']
+        print(self.market_id)
+        self.market_name = market_catalogue['marketName']
+        self.is_market_data_delayed = market_book[0]['isMarketDataDelayed']
+        self.status = market_book[0]['status']
+        self.bet_delay = market_book[0]['betDelay']
+        self.bsp_reconciled = market_book[0]['bspReconciled']
+        self.complete = market_book[0]['complete']
+        self.inplay = market_book[0]['inplay']
+        self.number_of_winners = market_book[0]['numberOfRunners']
+        self.number_of_runners = market_book[0]['numberOfActiveRunners']
+        self.number_of_active_runners = market_book[0]['numberOfActiveRunners']
+        self.total_matched = market_book[0]['totalMatched']
+        self.total_available = market_book[0]['totalAvailable']
+        self.cross_matching = market_book[0]['crossMatching']
+        self.runners_voidable = market_book[0]['runnersVoidable']
+        self.version = market_book[0]['version']
 
-        # initialize runners
-        self.runners = []
-        for item in response[0]['runners']:
-            runner = Runner(item)
-            self.runners.append(runner)
+        self.insert()
+
+        # initialize runner
+
+    def insert(self):
+        values = (self.ev_id, self.ev_name, self.market_id, self.market_name, self.is_market_data_delayed,
+                  self.status, self.bet_delay, self.bsp_reconciled, self.complete, self.inplay,
+                  self.number_of_winners, self.number_of_runners, self.number_of_active_runners,
+                  self.total_matched, self.cross_matching, self.runners_voidable, self.version)
+        try:
+            connection = mysql.connector.connect(**self.mysql_credentials)
+            cursor = connection.cursor()
+            print('  ..updating markets [{}]'.format(self.market_name))
+            cursor.execute(self.query, values)
+            connection.commit()
+        except mysql.connector.Error as error:
+            print('ERR [Market -> insert][{}]:'.format(self.market_name), error)
 
 
 class Runner:
 
     def __init__(self, data: dict):
-        """
-        :param data:
-        """
-        for key, value in data.items():
-            if key == 'selectionId':
-                self.selection_id = value
-            if key == 'handicap':
-                self.selection_id = value
-            if key == 'status':
-                self.status = value
-            if key == 'totalMatched':
-                self.total_matched = value
+        pass
